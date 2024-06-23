@@ -3,6 +3,12 @@ from genetic_algorithm import GeneticAlgorithm
 import numpy as np
 
 def run_experiments(population_size, mutation_rate, crossover_rate, num_generations, budgets, utilities, costs, elitism_rate, repair_method, num_instances=30):
+    """
+    Runs multiple instances of the genetic algorithm to collect data on the performance
+
+    Returns:
+        tuple: Mean and standard deviation of fitness and diversity over generations.
+    """    
     best_fitnesses = []
     diversities = []
 
@@ -21,6 +27,12 @@ def run_experiments(population_size, mutation_rate, crossover_rate, num_generati
 
 
 def compare_population_size_computation_times(population_sizes, mutation_rate, crossover_rate, num_generations, budgets, utilities, costs, elitism_rate, num_instances=10):
+    """
+    Compares computation times of different repair methods across varying population sizes.
+
+    Returns:
+        tuple: Average and standard deviation of computation times for each population size using different repair methods.
+    """
     avg_times_ratio = []
     std_times_ratio = []
     avg_times_algorithm_1 = []
