@@ -1,20 +1,26 @@
+import time
 import numpy as np
-import random
+from itertools import combinations
 
 class GeneticAlgorithm:
-    def __init__(self, population_size, mutation_rate, crossover_rate, num_generations, budgets, utilities, costs):
-        """
-        Initialize the genetic algorithm with the given parameters.
-        
-        Parameters:
-        - population_size: Number of individuals in the population.
-        - mutation_rate: Probability of mutating a gene.
-        - crossover_rate: Probability of performing crossover.
-        - num_generations: Number of generations to run the algorithm.
-        - budgets: Array of budget constraints for each cost dimension.
-        - utilities: Array of utilities for each item.
-        - costs: 2D array where each row represents the costs of an item across different dimensions.
-        """
+    """
+    Genetic Algorithm
+
+    Attributes:
+        population_size (int): Number of individuals in the population.
+        mutation_rate (float): Probability of mutation for each gene.
+        crossover_rate (float): Probability of crossover between two parents.
+        num_generations (int): Number of generations to evolve.
+        budgets (list): Budget constraints for each category.
+        utilities (list): Utilities (values) of the items.
+        costs (list): Costs of the items across different categories.
+        elitism_rate (float): Proportion of the best individuals to retain each generation.
+        num_items (int): Number of items (genes) in each individual.
+        population (numpy.ndarray): Current population of individuals.
+        best_fitness_history (list): History of the best fitness values over generations.
+        diversity_history (list): History of population diversity over generations.
+    """
+    def __init__(self, population_size, mutation_rate, crossover_rate, num_generations, budgets, utilities, costs, elitism_rate):
         self.population_size = population_size
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
@@ -22,165 +28,158 @@ class GeneticAlgorithm:
         self.budgets = budgets
         self.utilities = utilities
         self.costs = costs
+        self.elitism_rate = elitism_rate
         self.num_items = len(utilities)
         self.population = self.initialize_population()
+        self.best_fitness_history = []
+        self.diversity_history = []
 
     def initialize_population(self):
-        """
-        Create an initial population of random binary solutions.
-        
-        Returns:
-        A 2D array where each row is a binary vector representing a solution.
-        """
         return np.random.randint(2, size=(self.population_size, self.num_items))
 
-    def fitness(self, solution):
-        """
-        Calculate the fitness of a solution. Fitness is the total utility if the solution respects all budget constraints.
-        
-        Parameters:
-        - solution: Binary vector representing a solution.
-        
-        Returns:
-        Total utility if the solution is possible, otherwise 0.
-        """
-        total_utility = np.sum(solution * self.utilities)
-        for i in range(len(self.budgets)):
-            if np.sum(solution * self.costs[:, i]) > self.budgets[i]:
-                return 0
+    def fitness(self, individual):
+        total_utility = np.sum(individual * self.utilities)
+        total_costs = np.sum(individual[:, np.newaxis] * self.costs, axis=0)
+        if np.any(total_costs > self.budgets):
+            return 0  # Penalty for infeasible solutions
         return total_utility
 
     def selection(self):
         """
-        Select individuals from the current population based on their fitness.
-        
-        Returns:
-        A new population array with selected individuals.
+        Selects individuals for the next generation using a fitness-proportionate selection.
         """
-        # Calculating fitnesses
         fitnesses = np.array([self.fitness(individual) for individual in self.population])
+        total_fitness = fitnesses.sum()
 
-        # Compute selection probabilities for each individual based on their fitness 
-        # in order to represent the weight of each individual fitness
-        probabilities = fitnesses / fitnesses.sum()
-
-        # Select individuals based on their fitness weights promoting higher ones
+        if total_fitness == 0:
+            probabilities = np.ones(self.population_size) / self.population_size  # Uniform distribution if all fitnesses are zero
+        else:
+            probabilities = fitnesses / total_fitness
+        
+        # Select individuals based on their fitness-proportionate probabilities.
+        # Therefore, individuals with higher fitness have more chance to be selected
         selected_indices = np.random.choice(np.arange(self.population_size), size=self.population_size, p=probabilities)
         return self.population[selected_indices]
 
     def crossover(self, parent1, parent2):
-        """
-        Perform a crossover operation between two parents to produce an offspring.
-        
-        Parameters:
-        - parent1: Binary vector representing the first parent.
-        - parent2: Binary vector representing the second parent.
-        
-        Returns:
-        A binary vector representing the offspring.
-        """
         if np.random.rand() < self.crossover_rate:
-            # Select a random crossover point
-            # From 1 to num_items - 1 to ensure to take at least one element
-            # from both parents
             point = np.random.randint(1, self.num_items - 1)
-
             return np.concatenate((parent1[:point], parent2[point:]))
-        return random.choice([parent1, parent2])
+        return parent1 if np.random.rand() < 0.5 else parent2
 
     def mutate(self, individual):
-        """
-        Mutate an individual by flipping bits with a probability equal to the mutation rate.
-        
-        Parameters:
-        - individual: Binary vector representing the individual to mutate.
-        
-        Returns:
-        The mutated binary vector.
-        """
-        for i in range(self.num_items):
-            if np.random.rand() < self.mutation_rate:
-                individual[i] = 1 - individual[i]
+        mutation_indices = np.random.rand(self.num_items) < self.mutation_rate
+        individual[mutation_indices] = 1 - individual[mutation_indices]
         return individual
 
-    def highest_utility_repair(self, individual):
+    def repair_ratio_utility_cost(self, individual):
         """
-        Repair a solution to ensure it respects the budget constraints.
-        
-        Parameters:
-        - individual: Binary vector representing the solution to repair.
-        
-        Returns:
-        A binary vector representing the repaired solution.
+        Repairs an individual by removing items with the worst utility-to-cost ratio
         """
-        for i in range(len(self.budgets)):
-            while np.sum(individual * self.costs[:, i]) > self.budgets[i]:
-                # Find the item with the highest utility that is included in the solution
-                worst_item_indice = np.argmax(self.utilities * individual)
+        total_costs = np.sum(self.costs, axis=1)
+        while np.any(np.sum(individual[:, np.newaxis] * self.costs, axis=0) > self.budgets):
+            # Identify the items (=1) that are included in the individual
+            included_items = (individual == 1)
 
-                # Remove that item from the solution
-                individual[worst_item_indice] = 0
+            # Calculating ratios
+            utility_to_total_cost_ratio = self.utilities[included_items] / total_costs[included_items]
+
+            # Find the index of the item with the worst (minimum) utility-to-total-cost ratio
+            worst_item_index = np.argmin(utility_to_total_cost_ratio)
+
+            # Get the actual index of the worst item in the original individual's array
+            actual_worst_item_index = np.where(included_items)[0][worst_item_index]
+            
+            individual[actual_worst_item_index] = 0
         return individual
     
-    def ratio_utility_cost_repair(self, individual):
+    def repair_algorithm_1(self, individual):
         """
-        Repair a solution to ensure it respects the budget constraints.
-        
-        This version repairs the non possible solutions by evaluating the utility/cost ratios
-        Then, it get rid of the les
-        Parameters:
-        - individual: Binary vector representing the solution to repair.
-        
-        Returns:
-        A binary vector representing the repaired solution.
+        Repair method of the given subject
+        Repairs an individual by ordering items by decreasing utility, 
+        removing items if budgets are exceeded, and trying to add them back if possible.
         """
-        for i in range(len(self.budgets)):
-            # While the total cost in dimension 'i' exceeds the budget
-            while np.sum(individual * self.costs[:, i]) > self.budgets[i]:
-                # Calculate utility-to-cost ratio for included items
-                included_items = individual == 1
-                utility_to_cost_ratio = self.utilities[included_items] / self.costs[included_items, i]
-                
-                # Find the index of the item with the lowest utility-to-cost ratio
-                worst_item_index = np.argmin(utility_to_cost_ratio)
-                
-                # Map the index to the original item index
-                actual_worst_item_index = np.where(included_items)[0][worst_item_index]
-                
-                # Remove that item from the solution
-                individual[actual_worst_item_index] = 0
-                
+        # Order the objects by decreasing utility
+        ordered_indices = np.argsort(-self.utilities)
+        costs_sum = np.sum(individual[:, np.newaxis] * self.costs, axis=0)
+
+        # Remove objects if budgets are exceeded
+        for l in ordered_indices[::-1]:
+            if individual[l] == 1 and np.any(costs_sum > self.budgets):
+                individual[l] = 0
+                costs_sum -= self.costs[l]
+
+        # Try to add objects back
+        for l in ordered_indices:
+            if individual[l] == 0 and np.all(costs_sum + self.costs[l] <= self.budgets):
+                individual[l] = 1
+                costs_sum += self.costs[l]
+
         return individual
 
+    def run(self, repair_method):
+        """
+        Runs the genetic algorithm for the specified number of generations.
+        Uses the specified repair method to maintain feasibility.
+        """
+        num_elites = int(self.population_size * self.elitism_rate)
+        self.best_fitness_history = []
+        self.diversity_history = []
 
-    def run(self):
-        """
-        Run the genetic algorithm for the specified number of generations.
-        
-        Returns:
-        The best solution found.
-        """
         for generation in range(self.num_generations):
-            # Select individuals based on fitness
+            # Calculate current generation fitnesses
+            fitnesses = np.array([self.fitness(individual) for individual in self.population])
+
+            # Proceed to selection for crossover and selecting the elites of current generation
+            elite_indices = np.argsort(fitnesses)[-num_elites:]
+            elites = self.population[elite_indices]
             selected_population = self.selection()
             next_population = []
-            for i in range(0, self.population_size, 2):
-                # Choose pairs of parents
+
+            for i in range(0, self.population_size - num_elites, 2):
+                # Crossover
                 parent1, parent2 = selected_population[i], selected_population[i + 1]
-                # Perform crossover to create offspring
                 offspring1, offspring2 = self.crossover(parent1, parent2), self.crossover(parent2, parent1)
-                # Mutate offspring
+
+                # Mutation
                 offspring1, offspring2 = self.mutate(offspring1), self.mutate(offspring2)
-                # Repair offspring to ensure they are valid solutions
-                offspring1, offspring2 = self.repair(offspring1), self.repair(offspring2)
+
+                # Repair
+                offspring1 = getattr(self, repair_method)(offspring1)
+                offspring2 = getattr(self, repair_method)(offspring2)
+
                 next_population.extend([offspring1, offspring2])
-            # Replace the old population with the new one
+
+            next_population.extend(elites)
             self.population = np.array(next_population)
-            # Calculate the best fitness in the current generation
-            best_fitness = max([self.fitness(individual) for individual in self.population])
-            print(f'Generation {generation}: Best Fitness = {best_fitness}')
-        # Find and return the best solution in the final population
-        best_solution = self.population[
-                np.argmax([self.fitness(individual) for individual in self.population])
-            ]
-        return best_solution
+
+            # Updating best fintess and keeping track of current fitness
+            best_fitness = max(fitnesses)
+            self.best_fitness_history.append(best_fitness)
+            self.diversity_history.append(self.calculate_diversity())
+
+        return self.population[np.argmax([self.fitness(individual) for individual in self.population])]
+
+    def calculate_diversity(self):
+        """
+        Calculates the average Hamming distance (that we use to represent diversity) 
+        between all pairs of individuals in the population.
+        """
+        total_hamming_distance = 0
+        num_comparisons = 0
+
+        for (ind1, ind2) in combinations(self.population, 2):
+            total_hamming_distance += np.sum(ind1 != ind2)
+            num_comparisons += 1
+
+        average_hamming_distance = total_hamming_distance / num_comparisons
+        return average_hamming_distance
+
+    def run_with_timing(self, repair_method):
+        """
+        Launch the genetic algorithm and calculate the time taken
+        """
+        start_time = time.time()
+        self.run(repair_method)
+        end_time = time.time()
+        return end_time - start_time
